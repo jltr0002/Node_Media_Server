@@ -1,7 +1,7 @@
 {
   "dependencies": {
     "ffprobe": "^1.1.2",
-    "node-media-server": "^4.0.7",
+    "node-media-server": "^4.0.12",
     "serve-index": "^1.9.1"
   }
 }
