@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>DASH Streaming Player</title>
+  <!-- Dash.js CDN -->
+  <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;background:#f6f6f6;margin:0;padding:2rem;display:flex;flex-direction:column;align-items:center;gap:1.5rem}
+    #config,#controls{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+    label{font-weight:600}
+    input,select,button{padding:.35rem .6rem;font-size:1rem;border:1px solid #ccc;border-radius:4px}
+    button{cursor:pointer;background:#007bff;color:#fff;border:none}
+    button:hover{background:#0264ca}
+    #playerContainer{width:100%;max-width:900px}
+    video{width:100%;height:auto;background:#000}
+  </style>
+</head>
+<body>
+  <!-- 1️⃣ Server selection -->
+  <div id="config">
+    <label for="serverInput">Server&nbsp;URL:</label>
+    <input id="serverInput" type="text" size="30" placeholder="http://192.168.1.100:8000" />
+    <button id="loadBtn">Load streams</button>
+  </div>
+
+  <!-- 2️⃣ Stream selection -->
+  <div id="controls" style="display:none;">
+    <label for="streamSelect">Select stream:</label>
+    <select id="streamSelect">
+      <option value="">-- choose --</option>
+    </select>
+  </div>
+
+  <!-- 3️⃣ Player -->
+  <div id="playerContainer" style="display:none;">
+    <video id="videoPlayer" controls></video>
+  </div>
+
+  <script>
+    const serverInput   = document.getElementById('serverInput');
+    const loadBtn       = document.getElementById('loadBtn');
+    const controlsDiv   = document.getElementById('controls');
+    const streamSelect  = document.getElementById('streamSelect');
+    const playerDiv     = document.getElementById('playerContainer');
+    const video         = document.getElementById('videoPlayer');
+    const player        = dashjs.MediaPlayer().create();
+    player.initialize(video, null, false);
+
+    let BASE_URL = window.location.origin; // fallback
+
+    /** Fetches stream list and populates dropdown */
+    async function loadStreams() {
+      try {
+        streamSelect.innerHTML = '<option value="">-- choose --</option>'; // reset list
+        const res  = await fetch(`${BASE_URL}/avaliable_multimedia/streams.json`, { cache: 'no-cache' });
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+        const list = await res.json();
+        if (!Array.isArray(list) || !list.length) throw new Error('empty list');
+
+        list.forEach(({ name }) => {
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name;
+          streamSelect.appendChild(opt);
+        });
+        controlsDiv.style.display = 'flex';
+      } catch (err) {
+        alert(`Could not load streams from ${BASE_URL}:\n${err.message}`);
+        console.error(err);
+      }
+    }
+
+    /** Builds the manifest URL for a given stream name */
+    function buildMpdUrl(name) {
+      return `${BASE_URL}/streams/${name}/${name}.mpd`;
+    }
+
+    /** Handle click on Load Streams button */
+    loadBtn.addEventListener('click', () => {
+      BASE_URL = (serverInput.value.trim() || window.location.origin).replace(/\/$/, ''); // remove trailing /
+      loadStreams();
+    });
+
+    /** Handle stream selection */
+    streamSelect.addEventListener('change', () => {
+      const name = streamSelect.value;
+      if (!name) return;
+      const mpd = buildMpdUrl(name);
+      console.log('Playing', mpd);
+      player.attachSource(mpd);
+      playerDiv.style.display = 'block';
+    });
+  </script>
+</body>
+</html>
