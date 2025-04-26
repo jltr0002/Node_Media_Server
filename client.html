@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Live Stream Player (DASH.js)</title>
   <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -45,7 +46,7 @@
     button:hover {
       background: #0056b3;
     }
-    .stats {
+    .stats, .controls {
       margin-top: 20px;
     }
     .stats div {
@@ -59,7 +60,11 @@
     <input type="text" id="mpdUrl" placeholder="Enter MPD URL (e.g. http://localhost:8000/stream/stream1.mpd)">
     <button onclick="loadStream()">Load Stream</button>
 
-    <select id="qualitySelector" onchange="changeQuality()" style="display:none;"></select>
+    <div class="controls">
+      <select id="qualitySelector" onchange="changeQuality()" style="display:none;"></select>
+      <select id="audioSelector" onchange="changeAudio()" style="display:none;"></select>
+      <select id="captionSelector" onchange="changeCaption()" style="display:none;"></select>
+    </div>
 
     <video id="videoPlayer" controls></video>
 
@@ -68,10 +73,14 @@
       <div><strong>Buffer Level:</strong> <span id="bufferLevel">0</span> seconds</div>
       <div><strong>Live Latency:</strong> <span id="liveLatency">0</span> seconds</div>
     </div>
+
+    <canvas id="statsChart" height="100"></canvas>
   </div>
 
   <script>
     let player;
+    let chart;
+    let statsInterval;
 
     function loadStream() {
       const url = document.getElementById('mpdUrl').value;
@@ -84,20 +93,28 @@
       player = dashjs.MediaPlayer().create();
 
       player.updateSettings({
-        'streaming': {
-          'lowLatencyEnabled': true,
-          'liveDelay': 3,
-          'scheduleWhilePaused': false,
-          'fastSwitchEnabled': true
+        streaming: {
+          lowLatencyEnabled: true,
+          liveDelay: 3,
+          scheduleWhilePaused: false,
+          fastSwitchEnabled: true
         }
       });
 
-      player.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, populateQualities);
-      player.on(dashjs.MediaPlayer.events.FRAGMENT_LOADING_COMPLETED, updateStats);
-      player.on(dashjs.MediaPlayer.events.PLAYBACK_PROGRESS, updateStats);
-      player.on(dashjs.MediaPlayer.events.PLAYBACK_TIME_UPDATED, updateStats);
-
       player.initialize(video, url, true);
+
+      player.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
+        populateQualities();
+        populateAudioTracks();
+        populateCaptions();
+      });
+
+      initChart();
+
+      if (statsInterval) {
+        clearInterval(statsInterval);
+      }
+      statsInterval = setInterval(updateStats, 1000);
     }
 
     function populateQualities() {
@@ -106,28 +123,71 @@
 
       const bitrates = player.getBitrateInfoListFor('video');
 
-      if (bitrates.length > 0) {
-        qualitySelector.style.display = 'block';
+      if (!bitrates || bitrates.length === 0) {
+        setTimeout(populateQualities, 500); // Retry after 0.5s if not ready
+        return;
+      }
 
-        let autoOption = document.createElement('option');
-        autoOption.value = 'auto';
-        autoOption.text = 'Auto';
-        qualitySelector.appendChild(autoOption);
+      qualitySelector.style.display = 'block';
 
-        bitrates.forEach((level, index) => {
+      let autoOption = document.createElement('option');
+      autoOption.value = 'auto';
+      autoOption.text = 'Auto';
+      qualitySelector.appendChild(autoOption);
+
+      bitrates.forEach((level, index) => {
+        let option = document.createElement('option');
+        option.value = index;
+        option.text = `${level.height}p (${Math.round(level.bitrate/1000)} kbps)`;
+        qualitySelector.appendChild(option);
+      });
+    }
+
+    function populateAudioTracks() {
+      const audioSelector = document.getElementById('audioSelector');
+      const audioTracks = player.getTracksFor('audio');
+
+      audioSelector.innerHTML = '';
+      if (audioTracks.length > 0) {
+        audioSelector.style.display = 'block';
+
+        audioTracks.forEach((track, index) => {
           let option = document.createElement('option');
-          option.value = index;
-          option.text = `${level.height}p (${Math.round(level.bitrate/1000)} kbps)`;
-          qualitySelector.appendChild(option);
+          option.value = track.index;
+          option.text = track.lang || `Audio ${index}`;
+          audioSelector.appendChild(option);
         });
       } else {
-        qualitySelector.style.display = 'none';
+        audioSelector.style.display = 'none';
+      }
+    }
+
+    function populateCaptions() {
+      const captionSelector = document.getElementById('captionSelector');
+      const textTracks = player.getTracksFor('text');
+
+      captionSelector.innerHTML = '';
+      if (textTracks.length > 0) {
+        captionSelector.style.display = 'block';
+
+        let noneOption = document.createElement('option');
+        noneOption.value = 'off';
+        noneOption.text = 'No captions';
+        captionSelector.appendChild(noneOption);
+
+        textTracks.forEach((track, index) => {
+          let option = document.createElement('option');
+          option.value = track.index;
+          option.text = track.lang || `Caption ${index}`;
+          captionSelector.appendChild(option);
+        });
+      } else {
+        captionSelector.style.display = 'none';
       }
     }
 
     function changeQuality() {
       const selected = document.getElementById('qualitySelector').value;
-
       if (selected === 'auto') {
         player.setAutoSwitchQualityFor('video', true);
       } else {
@@ -136,12 +196,74 @@
       }
     }
 
-    function updateStats() {
-      const buffer = player.getBufferLength('video');
-      const latency = player.getCurrentLiveLatency();
+    function changeAudio() {
+      const selected = parseInt(document.getElementById('audioSelector').value);
+      player.setCurrentTrack(player.getTracksFor('audio')[selected]);
+    }
 
-      document.getElementById('bufferLevel').textContent = buffer ? buffer.toFixed(2) : '0';
-      document.getElementById('liveLatency').textContent = latency ? latency.toFixed(2) : '0';
+    function changeCaption() {
+      const selected = document.getElementById('captionSelector').value;
+      if (selected === 'off') {
+        player.setTextTrack(-1);
+      } else {
+        player.setTextTrack(parseInt(selected));
+      }
+    }
+
+    function updateStats() {
+      if (!player || !player.isReady()) return;
+
+      const buffer = player.getBufferLength('video') || 0;
+      const latency = player.getCurrentLiveLatency() || 0;
+
+      document.getElementById('bufferLevel').textContent = buffer.toFixed(2);
+      document.getElementById('liveLatency').textContent = latency.toFixed(2);
+
+      if (chart) {
+        chart.data.labels.push('');
+        chart.data.datasets[0].data.push(buffer.toFixed(2));
+        chart.data.datasets[1].data.push(latency.toFixed(2));
+
+        if (chart.data.labels.length > 30) {
+          chart.data.labels.shift();
+          chart.data.datasets[0].data.shift();
+          chart.data.datasets[1].data.shift();
+        }
+
+        chart.update();
+      }
+    }
+
+    function initChart() {
+      const ctx = document.getElementById('statsChart').getContext('2d');
+      chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [
+            {
+              label: 'Buffer Level (s)',
+              borderColor: 'blue',
+              data: [],
+              fill: false,
+            },
+            {
+              label: 'Live Latency (s)',
+              borderColor: 'red',
+              data: [],
+              fill: false,
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          scales: {
+            y: {
+              beginAtZero: true
+            }
+          }
+        }
+      });
     }
   </script>
 </body>
